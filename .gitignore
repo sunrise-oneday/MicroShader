@@ -1,0 +1,29 @@
+# Build artifacts
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+.vs/
+
+# Native AOT / publish output
+publish/
+pub/
+/dist/
+*.vsix
+
+# Test results
+TestResults/
+*.trx
+
+# DXC binaries (not tracked; see third_party/dxc/dxc-lock.json for hash manifest)
+third_party/dxc/**/bin/
+third_party/dxc/**/*.dll
+
+# VS Code extension build output
+client/vscode/node_modules/
+client/vscode/dist/
+client/vscode/bin/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db

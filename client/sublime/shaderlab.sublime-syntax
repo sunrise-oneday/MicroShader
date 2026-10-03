@@ -1,0 +1,56 @@
+%YAML 1.2
+---
+name: Unity ShaderLab
+file_extensions: [shader, cginc]
+scope: source.shaderlab
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: program-blocks
+    - include: preprocessor
+    - include: keywords
+    - include: numbers
+
+  comments:
+    - match: /\*
+      scope: punctuation.definition.comment.begin.shaderlab
+      push:
+        - meta_scope: comment.block.shaderlab
+        - match: \*/
+          scope: punctuation.definition.comment.end.shaderlab
+          pop: true
+    - match: //
+      scope: punctuation.definition.comment.line.shaderlab
+      push:
+        - meta_scope: comment.line.double-slash.shaderlab
+        - match: $
+          pop: true
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.shaderlab
+      push:
+        - meta_scope: string.quoted.double.shaderlab
+        - match: '"'
+          scope: punctuation.definition.string.end.shaderlab
+          pop: true
+
+  program-blocks:
+    - match: '(?i)^\\s*(HLSLPROGRAM|CGPROGRAM)\\b'
+      scope: keyword.control.directive.program.begin.shaderlab
+    - match: '(?i)^\\s*(ENDHLSL|ENDCG)\\b'
+      scope: keyword.control.directive.program.end.shaderlab
+
+  preprocessor:
+    - match: '(?i)^\\s*#\\s*(include|include_with_pragmas|pragma|define|undef|if|ifdef|ifndef|else|elif|endif)\\b'
+      scope: keyword.control.directive.shaderlab
+
+  keywords:
+    - match: '(?i)\\b(Shader|SubShader|Pass|Properties|Tags|Fallback|CustomEditor|LOD|Blend|ZWrite|ZTest|Cull|Offset|ColorMask|Stencil)\\b'
+      scope: keyword.control.shaderlab
+
+  numbers:
+    - match: '\b\d+(\.\d+)?\b'
+      scope: constant.numeric.shaderlab

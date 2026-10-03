@@ -1,0 +1,22 @@
+{
+  "clients": {
+    "microshader": {
+      "enabled": true,
+      "command": [
+        "C:/Path/To/UnityShaderLsp.exe"
+      ],
+      "selector": "source.shaderlab",
+      "priority_selector": "source.shaderlab",
+      "schemes": [
+        "file",
+        "buffer"
+      ],
+      "enabled_configs": [],
+      "initializationOptions": {},
+      "settings": {},
+      "env": {
+        "MICROSHADER_PARENT_PID": "${pid}"
+      }
+    }
+  }
+}
