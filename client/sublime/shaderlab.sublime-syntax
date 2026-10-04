@@ -1,0 +1,72 @@
+%YAML 1.2
+---
+# Unity ShaderLab / HLSL 语法定义（Sublime Text 4）
+#
+# 这个文件同时承担两件事：
+#   1. 让 .shader / .cginc 有高亮；
+#   2. 给 scope 赋名 source.shaderlab —— LSP 的 selector 就是按它匹配的，
+#      没有它语言服务器不会被激活。
+#
+# 注意 YAML 单引号标量里的反斜杠是字面量，正则要写单个反斜杠（不要写成 \\s）。
+name: Unity ShaderLab
+file_extensions: [shader, cginc]
+scope: source.shaderlab
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: program-blocks
+    - include: preprocessor
+    - include: keywords
+    - include: numbers
+
+  comments:
+    - match: /\*
+      scope: punctuation.definition.comment.begin.shaderlab
+      push:
+        - meta_scope: comment.block.shaderlab
+        - match: \*/
+          scope: punctuation.definition.comment.end.shaderlab
+          pop: true
+    - match: //
+      scope: punctuation.definition.comment.line.shaderlab
+      push:
+        - meta_scope: comment.line.double-slash.shaderlab
+        - match: $
+          pop: true
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.shaderlab
+      push:
+        - meta_scope: string.quoted.double.shaderlab
+        - match: '"'
+          scope: punctuation.definition.string.end.shaderlab
+          pop: true
+
+  program-blocks:
+    - match: '(?i)^\s*(HLSLPROGRAM|CGPROGRAM)\b'
+      scope: keyword.control.directive.program.begin.shaderlab
+    - match: '(?i)^\s*(ENDHLSL|ENDCG)\b'
+      scope: keyword.control.directive.program.end.shaderlab
+
+  preprocessor:
+    - match: '(?i)^\s*#\s*(include|include_with_pragmas|pragma|define|undef|if|ifdef|ifndef|else|elif|endif)\b'
+      scope: keyword.control.directive.shaderlab
+
+  keywords:
+    - match: '(?i)\b(Shader|SubShader|Pass|Properties|Tags|FallBack|Fallback|CustomEditor|LOD|Name|Blend|BlendOp|ZWrite|ZTest|ZClip|Cull|Offset|ColorMask|AlphaToMask|Stencil|Ref|Comp|Pass|ReadMask|WriteMask)\b'
+      scope: keyword.control.shaderlab
+    - match: '(?i)\b(HideInInspector|NoScaleOffset|Normal|HDR|Gamma|PowerSlider|IntRange|Toggle|Enum|KeywordEnum)\b'
+      scope: storage.type.attribute.shaderlab
+    - match: '(?i)\b(CGINCLUDE|HLSLINCLUDE|ENDHLSLINCLUDE|ENDCGINCLUDE)\b'
+      scope: keyword.control.directive.shaderlab
+    - match: '(?i)\b(fixed|half|float|int|bool|sampler|sampler2D|sampler3D|samplerCUBE|Texture2D|Texture3D|TextureCube|struct|void|return|if|else|for|while|do|break|continue|discard|static|const|inline|uniform|in|out|inout|cbuffer|register)\b'
+      scope: storage.type.shaderlab
+    - match: '(?i)\b(SV_Position|SV_Target|SV_Target0|SV_Target1|SV_Depth|POSITION|NORMAL|TANGENT|TEXCOORD\d*|COLOR\d*|SEMANTIC|WORLD_POSITION|OBJECT_POSITION)\b'
+      scope: variable.parameter.semantic.shaderlab
+
+  numbers:
+    - match: '\b\d+(\.\d+)?([eE][-+]?\d+)?\b'
+      scope: constant.numeric.shaderlab
