@@ -1,0 +1,206 @@
+{
+  "name": "unity-shader-lsp",
+  "displayName": "Unity Shader LSP (MicroShader)",
+  "description": "Unity ShaderLab/HLSL 诊断、补全与导航。DXC 驱动、Native AOT、离线运行。",
+  "version": "0.1.8",
+  "publisher": "microshader",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sunrise-oneday/unity-shader-lsp.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "shaderlab",
+        "aliases": [
+          "Unity ShaderLab",
+          "ShaderLab"
+        ],
+        "extensions": [
+          ".shader",
+          ".glslinc",
+          ".shaderinc"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "shaderlab",
+        "scopeName": "source.shaderlab",
+        "path": "./syntaxes/shaderlab.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "MicroShader",
+      "properties": {
+        "microshader.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "UnityShaderLsp.exe 的自定义路径（exe 或其所在目录）。留空使用扩展内置的交付二进制。"
+        },
+        "microshader.attachForeignLanguages": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否也接管由其它扩展注册语言的 Shader 文件（如 Unity 官方扩展的 UnityShader）。关闭后只服务语言为 shaderlab 的文件。"
+        },
+        "microshader.analysisDebounceMs": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "markdownDescription": "打字防抖时长（毫秒）。**留空 = 使用服务端默认（300，实际夹取到 200–5000）**。\n\n调大能明显减少「打字时反复重编译」的 CPU 峰值（代价是诊断与 include 符号更新更迟）。改完需执行「MicroShader: 重启语言服务器」。"
+        },
+        "microshader.maxCompileThreads": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "markdownDescription": "DXC 并行编译线程上限。**留空 = 使用默认（8）**。\n\n调小可降低 CPU 占用峰值（分析会变慢），适合低配机器或与其它重型工具共存时使用；调大能让大工程更快。改完需执行「MicroShader: 重启语言服务器」。"
+        },
+        "microshader.syncIncludeFallbackFiles": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "markdownDescription": "补全缓存未命中时，同步扫描「当前块直连 include」的个数。**留空 = 使用默认（2）；0 = 关闭同步兜底**（补全路径完全不读盘，代价是新加的 `#include` 在后台预热完成前补不出符号）。\n\n改完需执行「MicroShader: 重启语言服务器」。"
+        },
+        "microshader.trace": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "markdownDescription": "把扩展与服务端之间的 LSP 报文写进「MicroShader」输出通道，用于排查「补全不出候选」「诊断不刷新」这类问题。\n\n- `off`：不记录（默认）\n- `messages`：记录请求/响应的方法名与耗时\n- `verbose`：记录完整报文体（非常啰嗦，只在定位问题时临时开）\n\n改完需执行「MicroShader: 重启语言服务器」。"
+        }
+      }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "unityShaderLsp.diagnose",
+          "when": "editorLangId == shaderlab || editorLangId == UnityShader || editorLangId == hlsl"
+        },
+        {
+          "command": "unityShaderLsp.copyDiagnostics",
+          "when": "editorLangId == shaderlab || editorLangId == UnityShader || editorLangId == hlsl"
+        }
+      ]
+    },
+    "configurationDefaults": {
+      "[shaderlab]": {
+        "editor.wordBasedSuggestions": "off",
+        "editor.suggest.showWords": false,
+        "editor.quickSuggestions": {
+          "other": true,
+          "comments": false,
+          "strings": false
+        }
+      },
+      "[UnityShader]": {
+        "editor.wordBasedSuggestions": "off",
+        "editor.suggest.showWords": false,
+        "editor.quickSuggestions": {
+          "other": true,
+          "comments": false,
+          "strings": false
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "unityShaderLsp.restart",
+        "title": "MicroShader: 重启语言服务器"
+      },
+      {
+        "command": "unityShaderLsp.diagnose",
+        "title": "MicroShader: 诊断当前文件（语言/服务器状态）"
+      },
+      {
+        "command": "unityShaderLsp.showLog",
+        "title": "MicroShader: 打开日志"
+      },
+      {
+        "command": "unityShaderLsp.copyDiagnostics",
+        "title": "MicroShader: 复制诊断信息到剪贴板"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "microshader.gettingStarted",
+        "title": "MicroShader 上手",
+        "description": "三步确认这个扩展在你的 Unity 工程里真的生效。",
+        "steps": [
+          {
+            "id": "openShader",
+            "title": "打开一个 .shader 文件",
+            "description": "先看一眼诊断长什么样，并确认状态栏显示「就绪」。",
+            "media": {
+              "markdown": "media/walkthrough-1-open.md"
+            }
+          },
+          {
+            "id": "verifyCompletion",
+            "title": "验证补全与跳转",
+            "description": "敲点号看候选，按 F12 看跳转。",
+            "media": {
+              "markdown": "media/walkthrough-2-completion.md"
+            }
+          },
+          {
+            "id": "optionalBridge",
+            "title": "（可选）接入 Unity 编辑器桥接",
+            "description": "让诊断用上编辑器实测的宏与关键字状态。不装也能用。",
+            "media": {
+              "markdown": "media/walkthrough-3-bridge.md"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.1.0",
+    "esbuild": "^0.23.1",
+    "typescript": "^5.5.4"
+  },
+  "allowScripts": {
+    "esbuild@0.23.1": true,
+    "@vscode/vsce-sign@2.1.0": true
+  },
+  "activationEvents": [
+    "onLanguage:shaderlab",
+    "onLanguage:UnityShader",
+    "onLanguage:hlsl",
+    "workspaceContains:**/*.shader"
+  ]
+}
