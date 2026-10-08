@@ -1,0 +1,36 @@
+# 编辑器与格式化约定
+# 缩进宽度按语言区分；.NET 与 TypeScript 用 4 空格，Markdown 与 JSON 用 2 空格。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{cs,ts,js,mjs,cjs,ps1}]
+indent_style = space
+indent_size = 4
+
+[*.{json,yml,yaml,md}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+# 文档里大量使用行内代码与表格，尾随空格无意义，但标题行末的两个空格是换行语义
+trim_trailing_whitespace = false
+
+[*.{cmd,bat}]
+end_of_line = crlf
+
+[*.sh]
+end_of_line = lf
+
+[*.cs]
+# 语言约定：private 字段用 _camelCase
+dotnet_naming_rule.private_fields_underscore.symbols = private_fields
+dotnet_naming_rule.private_fields_underscore.style = underscore_camel
+dotnet_naming_rule.private_fields_underscore.severity = suggestion
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
