@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>MicroShader.SelfTest</RootNamespace>
+    <AssemblyName>MicroShader.SelfTest</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MicroShader.Domain\MicroShader.Domain.csproj" />
+    <ProjectReference Include="..\MicroShader.ShaderLab\MicroShader.ShaderLab.csproj" />
+    <ProjectReference Include="..\MicroShader.ContextEngine\MicroShader.ContextEngine.csproj" />
+    <ProjectReference Include="..\MicroShader.DiagnosticEngine\MicroShader.DiagnosticEngine.csproj" />
+    <ProjectReference Include="..\MicroShader.ObservabilityEngine\MicroShader.ObservabilityEngine.csproj" />
+    <ProjectReference Include="..\MicroShader.CoordinationEngine\MicroShader.CoordinationEngine.csproj" />
+    <ProjectReference Include="..\MicroShader.IntelliSenseEngine\MicroShader.IntelliSenseEngine.csproj" />
+    <ProjectReference Include="..\MicroShader.NavigationEngine\MicroShader.NavigationEngine.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\tests\Fixtures\**\*.shader"
+             Link="Fixtures\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\tests\Fixtures\**\*.hlsl"
+             Link="Fixtures\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- 模块 11B：契约 1 的 schema。拷进输出目录后，自检可以直接拿它当
+         「Unity 脚本写的字段集」与「读端认的字段集」的漂移门禁。 -->
+    <Content Include="..\..\client\unity\endpoint.schema.json"
+             Link="UnityBridge\endpoint.schema.json"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

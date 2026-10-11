@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "运行扩展（Extension Development Host）",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/client/vscode"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/client/vscode/dist/**/*.js"
+      ],
+      "preLaunchTask": "扩展: 编译（esbuild）"
+    }
+  ]
+}

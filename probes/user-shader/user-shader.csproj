@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>user-shader</AssemblyName>
+    <RootNamespace>UserShaderProbe</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MicroShader.Domain\MicroShader.Domain.csproj" />
+    <ProjectReference Include="..\..\src\MicroShader.ShaderLab\MicroShader.ShaderLab.csproj" />
+    <ProjectReference Include="..\..\src\MicroShader.IntelliSenseEngine\MicroShader.IntelliSenseEngine.csproj" />
+    <ProjectReference Include="..\..\src\MicroShader.NavigationEngine\MicroShader.NavigationEngine.csproj" />
+  </ItemGroup>
+
+</Project>
