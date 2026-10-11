@@ -1,0 +1,67 @@
+{
+  "releaseTag": "v1.9.2607",
+  "releaseName": "DX Compiler Release for July 2026",
+  "publishedAt": "2026-07-29",
+  "assetName": "dxc_2026_07_29.zip",
+  "assetUrl": "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2607/dxc_2026_07_29.zip",
+  "assetBytes": 41625275,
+  "assetSha256": "A1DFB116BA3EEAE6A1582291B53A8E7BF65AD760676BD3194685C8F7367CD241",
+  "recordedAt": "2026-09-26",
+  "note": "两个 DLL 必须与包内许可证取自同一次 release 的同一个压缩包；两文件版本号格式不同，禁止做相等校验。",
+  "files": {
+    "bin/x64/dxcompiler.dll": {
+      "bytes": 28079968,
+      "sha256": "9A5100511E127C6A2FC78EDF984F95074A76D35B90C90C4D342430A5AE160E9B"
+    },
+    "bin/x64/dxil.dll": {
+      "bytes": 3831600,
+      "sha256": "FEB57253EFF0A622561E29B44CEDBE86B89FC9A5BC8DC00FA2F98FAFD712C2D8"
+    },
+    "inc/dxcapi.h": {
+      "bytes": 54624,
+      "sha256": "FF3CA20C5FF948D7B1050C4B96D1EE42A9ECC054724DC4DAFBEF50CC04FD1CDE"
+    },
+    "inc/dxcisense.h": {
+      "bytes": 42928,
+      "sha256": "4D944FC32F2253376BD98F5B071A1D045BD422D36997138938B85AB21E91439F"
+    },
+    "inc/hlsl/LICENCE.txt": {
+      "bytes": 12716,
+      "sha256": "F47B94FC51B04F4354A6C6F41FB84B0BD22A8EBFCDE9F93C1B4D9ABD7F6D14C2"
+    },
+    "LICENCE-MIT.txt": {
+      "bytes": 1093,
+      "sha256": "903DF5512F7D02609FED0C780A9B704F5A3EEB6E4D84EBE42A29845C81899A3C"
+    },
+    "LICENSE-LLVM.txt": {
+      "bytes": 1979,
+      "sha256": "729615317E28DD03907E46F0FC3B5E88F7853CEE61D1A1471D2749335516B46F"
+    },
+    "LICENSE-MS.txt": {
+      "bytes": 13163,
+      "sha256": "734F72F239FE7B07B4C7203F294C1A7CE27095687278BAB7E56D630D7C672963"
+    }
+  },
+  "license": "UIUC/NCSA (LLVM Release License) + MIT + Microsoft",
+  "designDocCorrection": "详设 v2.0 第 9 条写的 LICENSE.TXT / ThirdPartyNotices.txt 在 v1.9.2607 中并不存在；实际是 LICENCE-MIT.txt / LICENSE-LLVM.txt / LICENSE-MS.txt + inc/hlsl/LICENCE.txt。",
+  "shippedArtifacts": {
+    "note": "⚠ 实际交付件（dist/stg/bin 与 client/vscode/bin）用的是 **Windows SDK 构建**，与本文件上方锁定的官方 release 资产字节不同（14,316,960 B vs 28,079,968 B，约为一半；dxil 1,509,744 B vs 3,831,600 B）。因此上方 files 的哈希**无法校验交付件**，两者的许可证/再分发条款也不同。是否切换到上方锁定的 release 资产是待决策项（见 README 模块 12 与详设 ADR-007 / NFR-5）。",
+    "recordedAt": "2026-09-28",
+    "recordedFrom": [
+      "dist/stg/bin/dxcompiler.dll",
+      "dist/stg/bin/dxil.dll",
+      "client/vscode/bin/dxcompiler.dll",
+      "client/vscode/bin/dxil.dll"
+    ],
+    "files": {
+      "dxcompiler.dll": {
+        "bytes": 14316960,
+        "sha256": "EE728C3EE6B88C284DC98C29EAF4D078173E67C6B601B8603AA95003D6A154E7"
+      },
+      "dxil.dll": {
+        "bytes": 1509744,
+        "sha256": "179AB53C75008D91D71BEE43FD3CA697D5B5A9F08795146818E6DAB62AC86394"
+      }
+    }
+  }
+}
