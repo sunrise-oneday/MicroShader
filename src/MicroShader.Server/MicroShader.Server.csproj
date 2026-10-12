@@ -1,0 +1,68 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>UnityShaderLsp</AssemblyName>
+    <RootNamespace>MicroShader.Server</RootNamespace>
+
+    <!--
+      模块 12：交付形态 = Native AOT 原生 exe + 同目录成对的 dxcompiler.dll / dxil.dll。
+
+      ★ 刻意<b>不</b>在 csproj 里写 PublishAot：SDK 一旦看到它，就会把
+        System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported=false
+        写进 runtimeconfig —— 于是连 dotnet build / dotnet run（真 JIT）都自称「不支持动态代码」。
+        那既让运行时自述失真，也会悄悄改变运行期行为（详见详设 v2.0 第 7 条的同类风险）。
+
+      AOT 意图由两处保证，不靠这个属性：
+        ① AOT/裁剪分析器本来就由 Directory.Build.props 全局打开（IsAotCompatible + 三个 Analyzer）；
+        ② AOT 分析器（IsAotCompatible + EnableAotAnalyzer + EnableTrimAnalyzer）在 Directory.Build.props
+           全局打开，IL2026/IL2050/IL3050/IL3051/IL3052 作为 Warning 提示而非编译错误——
+           日常开发不被阻断，AOT 兼容性在发布阶段由 publish-aot.ps1 验证。
+      真正的原生编译由发布脚本显式开启：见 scripts/publish-aot.ps1。
+    -->
+
+    <!--
+      详设 v2.0 第 2 条：禁止 System.Text.Json 回退到反射。
+      本工程与全部依赖都不使用 JsonSerializer（协议层用手写 span 解析 + Utf8JsonWriter），
+      因此这是一条纯防御性开关：一旦将来有人引入反射式序列化，AOT 下会立刻失败而不是静默丢元数据。
+    -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+
+    <!-- 详设 v2.0 第 8 条：杀软误报的缓解必须可操作。补全 PE 版本信息资源是其中之一。 -->
+    <Company>MicroShader</Company>
+    <Product>MicroShader UnityShaderLsp</Product>
+    <FileDescription>MicroShader · Unity URP ShaderLab/HLSL Language Server</FileDescription>
+    <Version>0.1.0</Version>
+    <Copyright>UIUC/NCSA (DXC) · MIT (MicroShader)</Copyright>
+
+    <!--
+      详设 v2.0 第 1 条：IL3052（COM 互操作）/ IL3050（动态代码）等必须直接编译失败，
+      不允许被折叠成一条 IL2104 而漏掉。
+    -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <!--
+      2026-10-01：IL2026/IL2050/IL3050/IL3051/IL3052 从 WarningsAsErrors 降回 Warnings。
+      分析器仍开着（IsAotCompatible + EnableAotAnalyzer + EnableTrimAnalyzer 在 Directory.Build.props），
+      作为"能力探测"而非编译硬闸——日常开发不再被 AOT 不友好的写法阻断构建，
+      真正的 AOT 兼容性由 publish-aot.ps1 在发布阶段验证。
+    -->
+
+    <!--
+      刻意<b>不</b>关闭异常堆栈与资源键：详设 v2.0 第 7 条指出，
+      UseSystemResourceKeys / IlcGenerateStackTraceData=false 会牺牲异常可读性，
+      与模块 7「排障自诊断中枢」的目标直接对立。体积优先配置另行提供（见命令行帮助）。
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MicroShader.Domain\MicroShader.Domain.csproj" />
+    <ProjectReference Include="..\MicroShader.ShaderLab\MicroShader.ShaderLab.csproj" />
+    <ProjectReference Include="..\MicroShader.ContextEngine\MicroShader.ContextEngine.csproj" />
+    <ProjectReference Include="..\MicroShader.DiagnosticEngine\MicroShader.DiagnosticEngine.csproj" />
+    <ProjectReference Include="..\MicroShader.ObservabilityEngine\MicroShader.ObservabilityEngine.csproj" />
+    <ProjectReference Include="..\MicroShader.CoordinationEngine\MicroShader.CoordinationEngine.csproj" />
+    <ProjectReference Include="..\MicroShader.IntelliSenseEngine\MicroShader.IntelliSenseEngine.csproj" />
+    <ProjectReference Include="..\MicroShader.NavigationEngine\MicroShader.NavigationEngine.csproj" />
+  </ItemGroup>
+
+</Project>

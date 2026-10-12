@@ -1,0 +1,46 @@
+[
+    // MicroShader 键位覆盖 —— 放置位置：Packages/User/Default.sublime-keymap
+    //
+    // 为什么需要这个文件：LSP 包自带的 Default.sublime-keymap 把
+    // lsp_symbol_definition 的 f12 绑定写成了注释（默认不生效），
+    // 而 Sublime 内置的 f12 绑的是 goto_definition —— 那个命令不认识
+    // 语言服务器，在 shader 文件里永远找不到目标。
+    // 所以「按 F12 跳定义」在 Sublime 里必须由用户显式绑一次。
+
+    // F12：LSP 定义跳转，找不到时回退到内置跳转。
+    // context 限定只在「当前服务器宣告了 definitionProvider」时生效，
+    // 因此不会影响 C#、Python 等非 LSP 文件的原生 F12。
+    {
+        "keys": ["f12"],
+        "command": "lsp_symbol_definition",
+        "args": {
+            "side_by_side": false,
+            "force_group": true,
+            "fallback": true,
+            "group": -1
+        },
+        "context": [
+            {"key": "lsp.session_with_capability", "operand": "definitionProvider"}
+        ]
+    },
+
+    // Ctrl+Alt+Enter：跟随 #include 超链接 —— 对应 VS Code 里的 Ctrl+点击。
+    // LSP 包的 lsp_open_link 默认是 UNBOUND，且 LSP 不提供鼠标绑定，
+    // 所以在 Sublime 里只能用键盘触发。
+    // 选 ctrl+alt+enter 是因为它只在「替换面板」里有绑定（那是有 context 限定的），
+    // 编辑器里是空闲的；而 ctrl+enter 被内置的 Add Line 宏占用了。
+    {
+        "keys": ["ctrl+alt+enter"],
+        "command": "lsp_open_link",
+        "context": [
+            {"key": "lsp.link_available"}
+        ]
+    }
+
+    // 以下命令 LSP 包已经默认绑好，无需在此重复：
+    //   ctrl+alt+m    诊断面板
+    //   shift+f12     查找引用
+    //   ctrl+alt+空格  参数提示
+    //   ctrl+空格     触发补全（Sublime 内置）
+    //   ctrl+shift+o  转到符号（Sublime 内置，走 documentSymbolProvider）
+]

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MicroShader.ObservabilityEngine</RootNamespace>
+    <AssemblyName>MicroShader.ObservabilityEngine</AssemblyName>
+  </PropertyGroup>
+
+  <!-- 刻意零 ProjectReference：本模块是全系统的叶子依赖（黑匣子必须比它记录的对象都活得久）。 -->
+
+</Project>
