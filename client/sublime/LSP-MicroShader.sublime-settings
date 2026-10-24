@@ -1,0 +1,22 @@
+// MicroShader —— LSP helper 包自带的服务器配置
+//
+// 这个文件随 LSP-MicroShader.sublime-package 一起分发。LSP 按包名自动读取：
+// _register_plugin_impl 里对 LspPlugin 走 settings_path = Packages/<name>/<name>.sublime-settings，
+// 而 LspPlugin.__init_subclass__ 把 name 设成顶层包名（含 LSP- 前缀），
+// 所以文件名必须是 LSP-MicroShader.sublime-settings。因此**不需要**往
+// Packages/User/LanguageServers.sublime-settings 里写任何东西。
+//
+// 注意 $storage_path —— LSP 支持的模板变量，展开为 <数据目录>/Package Storage。
+// Windows 上「数据目录」是 %LOCALAPPDATA%\Sublime Text（不是 %APPDATA% ——
+// Installed Packages 在 Roaming，Package Storage 在 Local）。
+// 目录名用包全名 LSP-MicroShader（LspPlugin 的 plugin_storage_path 就是这么拼的），
+// 二进制由 plugin.py 在包加载时从包内释放到那里，所以路径里没有硬编码。
+{
+  "enabled": true,
+  "command": ["$storage_path/LSP-MicroShader/bin/UnityShaderLsp.exe"],
+  "selector": "source.shaderlab",
+  "priority_selector": "source.shaderlab",
+  "schemes": ["file", "buffer"],
+  "initialization_options": {},
+  "settings": {}
+}
