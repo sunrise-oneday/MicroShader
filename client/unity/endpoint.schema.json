@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MicroShader Unity Bridge Endpoint (Contract 1)",
+  "description": "由 <Project>/Assets/**/Editor/ShaderLspBridge.cs 在运行期原子写入 <Project>/Library/MicroShader/endpoint.json。读端必须容忍该文件短暂不存在或消失，退化为「未绑定」而不是报错。",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "version",
+    "unityPid",
+    "transport",
+    "address",
+    "port"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "enum": [
+        "1.0.0"
+      ],
+      "description": "schema 版本。读端不认识即拒绝连接，绝不按字段位置硬解。"
+    },
+    "bridgeVersion": {
+      "type": "string",
+      "description": "写文件的桥接脚本版本（当前 MicroShaderBridge/ 组的版本，与语言服务端版本独立演进）。",
+      "examples": [
+        "0.2.0"
+      ]
+    },
+    "unityPid": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Unity 编辑器主进程 PID。判活必须与 unityStartTimeUtc 组合使用（PID 会被复用）。"
+    },
+    "unityProcessName": {
+      "type": "string",
+      "description": "进程名，仅作辅助判据。注意：「名字含 Unity」不可靠（同机可能有其它程序或改名后的构建产物）。"
+    },
+    "unityStartTimeUtc": {
+      "type": "string",
+      "description": "进程启动时间（ISO-8601 带时区）。抗 PID 复用的权威判据：与当前实际启动时间偏差超过约 2 秒即判为复用 → 判死。取不到时（权限）必须降级为告警，绝不能据此删文件。"
+    },
+    "unityVersion": {
+      "type": "string",
+      "examples": [
+        "2022.3.62f3c1"
+      ]
+    },
+    "projectPath": {
+      "type": "string",
+      "description": "工程根绝对路径（正斜杠归一化）。多实例消歧的第一判据，也是「只读自己工程」的边界。"
+    },
+    "projectName": {
+      "type": "string"
+    },
+    "transport": {
+      "type": "string",
+      "enum": [
+        "tcp",
+        "pipe",
+        "ws"
+      ],
+      "description": "传输类型。当前实现只有 tcp；pipe/ws 见 ADR-016 的后续项。读端对未实现值应拒绝连接而不是猜。"
+    },
+    "address": {
+      "type": "string",
+      "description": "监听地址。当前恒为 127.0.0.1（只绑回环，无网络暴露面）。",
+      "examples": [
+        "127.0.0.1"
+      ]
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "description": "监听端口。默认动态分配（bind port 0），因此必须从本文件读取，禁止写死。"
+    },
+    "protocol": {
+      "type": "string",
+      "enum": [
+        "ldjson-1"
+      ],
+      "description": "线协议：换行分隔的单行 JSON（LDJSON），每帧一个契约 2 载荷。"
+    },
+    "activeColorSpace": {
+      "type": "string",
+      "enum": [
+        "Linear",
+        "Gamma"
+      ],
+      "description": "PlayerSettings.colorSpace（编辑器活动色彩空间）。"
+    },
+    "activeBuildTarget": {
+      "type": "string",
+      "examples": [
+        "StandaloneWindows64"
+      ]
+    },
+    "graphicsApi": {
+      "type": "string",
+      "description": "构建目标的图形 API（不是编辑器自己跑在哪个后端）。",
+      "examples": [
+        "Direct3D11"
+      ]
+    },
+    "pipelineAssetType": {
+      "type": "string",
+      "description": "当前渲染管线资产类型名；内置管线时为 \"BuiltIn\"。",
+      "examples": [
+        "UniversalRenderPipelineAsset"
+      ]
+    },
+    "reloading": {
+      "type": "boolean",
+      "description": "域重载窗口标记。true 表示端口已被 beforeAssemblyReload 主动释放、但进程仍活着。读端此时**不得连接**（端口可能已被其它进程抢走），应等待文件被重写。"
+    },
+    "startedAtUtc": {
+      "type": "string",
+      "description": "本次写入时间（ISO-8601）。"
+    }
+  }
+}
