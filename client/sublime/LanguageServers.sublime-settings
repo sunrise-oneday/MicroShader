@@ -1,0 +1,38 @@
+// MicroShader —— Sublime Text 4 / LSP 包的服务端配置
+//
+// 放置位置：Packages/User/LanguageServers.sublime-settings
+// 菜单：Preferences → Package Settings → LSP → Server Configurations
+//
+// 注意：当前 LSP 包读的是这个文件（扁平格式：服务器名 → 配置），
+// 不是旧版的 LSP.sublime-settings + clients 键。旧格式不会被识别。
+//
+// 最省事的做法是别手改，改跑：
+//   pwsh -File scripts/install-sublime.ps1
+// 它会把下面这段合并进你的 LanguageServers.sublime-settings，
+// 并自动填好 exe 的绝对路径，同时不覆盖你已有的其它服务器配置。
+{
+  "microshader": {
+    "enabled": true,
+
+    // 必须是绝对路径（LSP 不做变量替换）。dxcompiler.dll 必须与它同目录，
+    // dxil.dll 可选。正斜杠避免 JSON 转义问题。
+    "command": ["C:/Path/To/UnityShaderLsp.exe"],
+
+    // 与 shaderlab.sublime-syntax 里的 scope 对应。没有这个语法包时 LSP 不会激活。
+    "selector": "source.shaderlab",
+
+    // 同一文件有多个服务器时，优先问 MicroShader。
+    "priority_selector": "source.shaderlab",
+
+    // 服务端只处理磁盘上的真实文件；buffer 用于未保存的新文件。
+    "schemes": ["file", "buffer"],
+
+    // 服务端目前不读初始化选项（保留为空对象以便将来扩展）。
+    "initialization_options": {},
+
+    // 服务端启动参数。留空时它会自己找 Unity 工程根（读 Unity Hub 的项目列表）；
+    // 想固定住就显式给：
+    //   "command": ["C:/Path/To/UnityShaderLsp.exe", "--project", "D:/MyUnityProject"],
+    "settings": {}
+  }
+}
