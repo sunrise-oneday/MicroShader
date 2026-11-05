@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MicroShader.IntelliSenseEngine</RootNamespace>
+    <AssemblyName>MicroShader.IntelliSenseEngine</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MicroShader.Domain\MicroShader.Domain.csproj" />
+    <ProjectReference Include="..\MicroShader.ShaderLab\MicroShader.ShaderLab.csproj" />
+    <ProjectReference Include="..\MicroShader.ObservabilityEngine\MicroShader.ObservabilityEngine.csproj" />
+  </ItemGroup>
+
+</Project>
