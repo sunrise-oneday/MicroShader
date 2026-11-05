@@ -1,0 +1,11 @@
+src/**
+node_modules/**
+esbuild.js
+tsconfig.json
+scripts/**
+**/*.map
+.vscode/**
+bin/**
+!bin/UnityShaderLsp.exe
+!bin/dxcompiler.dll
+!bin/dxil.dll
