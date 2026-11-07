@@ -1,0 +1,1287 @@
+using System.Buffers;
+using System.Collections.Frozen;
+using System.Text;
+using System.Text.Json;
+using MicroShader.CoordinationEngine.Scheduling;
+using MicroShader.CoordinationEngine.Session;
+using MicroShader.Domain;
+using MicroShader.IntelliSenseEngine;
+using MicroShader.ShaderLab;
+
+namespace MicroShader.SelfTest;
+
+/// <summary>
+/// 模块 9（轻量符号索引与即时智能补全）自检。
+/// </summary>
+/// <remarks>
+/// 验收口径对齐详设 v2.0 修正清单：
+/// ① 内置知识库只含语言层符号，URP 符号必须运行时现场解析（法律边界，见 "HlslBuiltins" 注释）；
+/// ② capabilities 必须成套声明 —— 这里用「注入/不注入 provider」两种会话实测宣告与实现的一致性；
+/// ③ 触发必须克制（只宣告 "." 与 "["）；
+/// ④ 降级路径必须显式（注释内不触发、定义在 include 里时返回空而不是猜）。
+/// </remarks>
+internal static class IntelliSenseTests
+{
+    private const string Suite = "IntelliSense";
+
+    public static void Register()
+    {
+        TestSuite.Add(Suite, "Trigger", Trigger);
+        TestSuite.Add(Suite, "AttributeComplete", AttributeComplete);
+        TestSuite.Add(Suite, "AttributeLspRoundTrip", AttributeLspRoundTrip);
+        TestSuite.Add(Suite, "MemberComplete", MemberComplete);
+        TestSuite.Add(Suite, "BuiltinComplete", BuiltinComplete);
+        TestSuite.Add(Suite, "BuiltinTypes", BuiltinTypes);
+        TestSuite.Add(Suite, "Hover", Hover);
+        TestSuite.Add(Suite, "Degrade", Degrade);
+        TestSuite.Add(Suite, "Capabilities", Capabilities);
+        TestSuite.Add(Suite, "MethodNotFound", MethodNotFound);
+        TestSuite.Add(Suite, "RegressionRules", RegressionRules);
+        TestSuite.Add(Suite, "LifecycleCallbacks", LifecycleCallbacks);
+        TestSuite.Add(Suite, "NestedMember", NestedMember);
+        TestSuite.Add(Suite, "SameNameAcrossPasses", SameNameAcrossPasses);
+        TestSuite.Add(Suite, "BareHlsl", BareHlsl);
+        TestSuite.Add(Suite, "TagValueComplete", TagValueComplete);
+    }
+
+    // ── 嵌套成员补全（2026-10-01）："v.posOS." 逐级推导字段类型 ────────────────
+    private static void NestedMember()
+    {
+        const string text = """
+            Shader "T/Nested"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        struct Inner { float3 posOS; half2 uv; };
+                        struct Outer { Inner geo; float w; };
+                        float4 frag(Outer v) : SV_Target
+                        {
+                            float3 a = v.geo.posOS.xyz;
+                            float2 b = v.geo.uv;
+                            float c = v.geo.missing.x;
+                            return 0;
+                        }
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+        var service = new IntelliSenseService();
+
+        var (l1, c1) = Cursor(text, "v.geo.posOS", 6);
+        var chain = TriggerContext.Detect(text, l1, c1).MemberChain;
+        Check.Equal("v|geo", string.Join('|', chain), "点号链应为 v.geo");
+
+        var inner = All(Completion(service, text, l1, c1) ?? "{}", "label");
+        Check.Contains(inner, "posOS", "v.geo. 必须补出 Inner.posOS");
+        Check.Contains(inner, "uv", "v.geo. 必须补出 Inner.uv");
+
+        var (l2, c2) = Cursor(text, "v.geo.posOS.xyz", 12);
+        var swz = All(Completion(service, text, l2, c2) ?? "{}", "label");
+        Check.True(swz.Count > 0, "v.geo.posOS. 必须补出 float3 分量");
+
+        var (l3, c3) = Cursor(text, "v.geo.uv", 2);
+        Check.Contains(All(Completion(service, text, l3, c3) ?? "{}", "label"), "geo", "单级 v. 行为不变");
+
+        var (l4, c4) = Cursor(text, "v.geo.missing.x", 14);
+        Check.True(Completion(service, text, l4, c4) is null || All(Completion(service, text, l4, c4)!, "label").Count == 0,
+            "链中有未知字段 → 降级为空，不猜");
+    }
+
+    // ── 跨 Pass 同名形参（2026-11-07）──────────────────────────────────────
+    /// <summary>
+    /// 同一个文件里不同 Pass 声明同名形参时，成员补全必须按「光标所在 Pass」解析。
+    /// </summary>
+    /// <remarks>
+    /// 真实语料（S_Anime3to2_Glass.shader）的形态：DepthOnly 与 DepthNormalsOnly 各自声明
+    /// 形参 "input"，但一个收 DepthAttributes、一个收 DepthNormalsVaryings，字段集不同。
+    /// 修复前扁平表 last-write-wins，4 个函数的 "input." 全部补出最后声明的那个结构体的字段。
+    /// </remarks>
+    private static void SameNameAcrossPasses()
+    {
+        const string text = """
+            Shader "T/SameName"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        Name "DepthOnly"
+                        Tags { "LightMode" = "DepthOnly" }
+                        HLSLPROGRAM
+                        struct DepthAttributes { float3 positionOS; half2 uv; };
+                        struct DepthVaryings { float4 positionCS; half2 uv; float4 screenPos; };
+                        DepthVaryings DepthVert(DepthAttributes input)
+                        {
+                            DepthVaryings o;
+                            o.positionCS = TransformObjectToHClip(input.positionOS);
+                            o.uv = input.uv;
+                            return o;
+                        }
+                        half4 DepthFrag(DepthVaryings input) : SV_Target
+                        {
+                            return input.screenPos;
+                        }
+                        ENDHLSL
+                    }
+                    Pass
+                    {
+                        Name "DepthNormalsOnly"
+                        Tags { "LightMode" = "DepthNormalsOnly" }
+                        HLSLPROGRAM
+                        struct DepthNormalsAttributes { float3 positionOS; float3 tangentOS; float3 normalOS; half2 uv; };
+                        struct DepthNormalsVaryings { float4 positionCS; float3 normalWS; half2 uv; };
+                        DepthNormalsVaryings DepthNormalsVertex(DepthNormalsAttributes input)
+                        {
+                            DepthNormalsVaryings o;
+                            o.positionCS = TransformObjectToHClip(input.positionOS);
+                            o.normalWS = TransformObjectToWorldNormal(input.normalOS);
+                            o.uv = input.uv;
+                            return o;
+                        }
+                        void DepthNormalsFragment(DepthNormalsVaryings input)
+                        {
+                            float3 n = input.normalWS;
+                        }
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+        var service = new IntelliSenseService();
+
+        // ① DepthVert：input → DepthAttributes（positionOS, uv）
+        var (vl1, vc1) = Cursor(text, "input.", 6, 0);
+        var vert = All(Completion(service, text, vl1, vc1) ?? "{}", "label");
+        Check.Contains(vert, "positionOS", "DepthVert 的 input. 必须是 DepthAttributes.positionOS");
+        Check.Contains(vert, "uv", "DepthVert 的 input. 必须是 DepthAttributes.uv");
+        Check.DoesNotContain(vert, "positionCS", "DepthVert 的 input. 不该出现 DepthVaryings.positionCS");
+        Check.DoesNotContain(vert, "screenPos", "DepthVert 的 input. 不该出现 DepthVaryings.screenPos");
+        Check.DoesNotContain(vert, "normalWS", "DepthVert 的 input. 不该出现 DepthNormalsVaryings.normalWS");
+
+        // ② DepthVert 第二处（同一函数体内，结果必须一致）
+        var (vl2, vc2) = Cursor(text, "input.", 6, 1);
+        var vertUv = All(Completion(service, text, vl2, vc2) ?? "{}", "label");
+        Check.Contains(vertUv, "uv", "DepthVert 第二处 input. 同样解析到 DepthAttributes");
+        Check.DoesNotContain(vertUv, "positionCS", "DepthVert 第二处 input. 不该出现 DepthVaryings");
+
+        // ③ DepthFrag：input → DepthVaryings（positionCS, uv, screenPos）
+        var (fl, fc) = Cursor(text, "input.", 6, 2);
+        var frag = All(Completion(service, text, fl, fc) ?? "{}", "label");
+        Check.Contains(frag, "positionCS", "DepthFrag 的 input. 必须是 DepthVaryings.positionCS");
+        Check.Contains(frag, "screenPos", "DepthFrag 的 input. 必须是 DepthVaryings.screenPos");
+        Check.DoesNotContain(frag, "normalWS", "DepthFrag 的 input. 不该出现 DepthNormalsVaryings.normalWS");
+        Check.DoesNotContain(frag, "tangentOS", "DepthFrag 的 input. 不该出现 DepthNormalsAttributes.tangentOS");
+
+        // ④ DepthNormalsVertex：input → DepthNormalsAttributes（positionOS, tangentOS, normalOS, uv）
+        var (nl1, nc1) = Cursor(text, "input.", 6, 3);
+        var nVert = All(Completion(service, text, nl1, nc1) ?? "{}", "label");
+        Check.Contains(nVert, "normalOS", "DepthNormalsVertex 的 input. 必须是 DepthNormalsAttributes.normalOS");
+        Check.Contains(nVert, "tangentOS", "DepthNormalsVertex 的 input. 必须是 DepthNormalsAttributes.tangentOS");
+        Check.DoesNotContain(nVert, "screenPos", "DepthNormalsVertex 的 input. 不该出现 DepthVaryings.screenPos");
+        Check.DoesNotContain(nVert, "normalWS", "DepthNormalsVertex 的 input. 不该出现 DepthNormalsVaryings.normalWS");
+
+        var (nl2, nc2) = Cursor(text, "input.", 6, 4);
+        var nVertNormal = All(Completion(service, text, nl2, nc2) ?? "{}", "label");
+        Check.Contains(nVertNormal, "normalOS", "DepthNormalsVertex 第二处 input. 同样解析到 DepthNormalsAttributes");
+
+        var (nl3, nc3) = Cursor(text, "input.", 6, 5);
+        var nVertUv = All(Completion(service, text, nl3, nc3) ?? "{}", "label");
+        Check.Contains(nVertUv, "uv", "DepthNormalsVertex 第三处 input. 同样解析到 DepthNormalsAttributes");
+
+        // ⑤ DepthNormalsFragment：input → DepthNormalsVaryings（positionCS, normalWS, uv）
+        var (nfl, nfc) = Cursor(text, "input.", 6, 6);
+        var nFrag = All(Completion(service, text, nfl, nfc) ?? "{}", "label");
+        Check.Contains(nFrag, "normalWS", "DepthNormalsFragment 的 input. 必须是 DepthNormalsVaryings.normalWS");
+        Check.Contains(nFrag, "positionCS", "DepthNormalsFragment 的 input. 必须是 DepthNormalsVaryings.positionCS");
+        Check.DoesNotContain(nFrag, "positionOS", "DepthNormalsFragment 的 input. 不该出现 DepthNormalsAttributes.positionOS");
+        Check.DoesNotContain(nFrag, "tangentOS", "DepthNormalsFragment 的 input. 不该出现 DepthNormalsAttributes.tangentOS");
+
+        // ⑥ 缓存复用路径：同一文本重复请求，结果必须逐字节一致（R6 不得因作用域表而漂移）
+        var first = Completion(service, text, vl1, vc1);
+        var second = Completion(service, text, vl1, vc1);
+        Check.Equal(first, second, "作用域解析后缓存命中结果必须一致");
+
+        TestCaseHelpers.Report("跨 Pass 同名形参："
+            + vert.Count + " / " + frag.Count + " / " + nVert.Count + " / " + nFrag.Count + " 个字段");
+    }
+
+    // ── 纯 HLSL 文件的本文件符号索引（2026-10-05）────────────────────────────
+    private static void BareHlsl()
+    {
+        // .hlsl / .cginc 里没有任何 HLSLPROGRAM / HLSLINCLUDE 标记，切片器不产出块。
+        // 修复前索引为空：同一文件里声明过的变量一条都补不出来。
+        const string bare = """
+            float4 shadowCoord;
+
+            float4 main() : SV_Target
+            {
+                return sha
+            }
+            """;
+        var service = new IntelliSenseService();
+
+        var (line, col) = Cursor(bare, "return sha", 10);
+        var labels = All(Completion(service, bare, line, col) ?? "{}", "label");
+        Check.Contains(labels, "shadowCoord", "纯 HLSL 文件必须补出本文件声明的变量");
+
+        // 反向约束：有 SubShader 的 ShaderLab 文件即使没有 program block，
+        // 也不能被当成 HLSL 整篇索引 —— 否则 Properties 里的名字会变成 HLSL 候选。
+        const string shaderLabOnly = """
+            Shader "T/NoProgramBlock"
+            {
+                Properties { _OnlyInProperties ("x", Float) = 1 }
+                SubShader
+                {
+                    Pass { }
+                }
+            }
+            """;
+        var (line2, col2) = Cursor(shaderLabOnly, "_OnlyInProperties", 15);
+        var labels2 = All(Completion(service, shaderLabOnly, line2, col2) ?? "{}", "label");
+        Check.True(!labels2.Contains("_OnlyInProperties"),
+            "有 SubShader 的文件不得被整篇当 HLSL 索引（该名字只出现在 Properties 里）");
+    }
+
+    // ── ShaderLab 标签值补全（Tags { "LightMode" = "…" } 里敲值）──────────────
+
+    private static void TagValueComplete()
+    {
+        // 测试用 schema：含内置 LightMode 值 + 一个自定义值（CustomShadow），
+        // 外加 RenderPipeline 封闭集合，用来覆盖「值标签」「封闭集合」「自由文本」三条路径。
+        var schema = new ShaderTagSchema
+        {
+            AllKnownTagNames = FrozenSet<string>.Empty,
+            ClosedSets = new Dictionary<string, FrozenSet<string>>(StringComparer.Ordinal)
+            {
+                ["RenderPipeline"] = FrozenSet.Create(StringComparer.OrdinalIgnoreCase, "UniversalPipeline"),
+            }.ToFrozenDictionary(StringComparer.Ordinal),
+            LightModeValues = FrozenSet.Create(
+                StringComparer.OrdinalIgnoreCase,
+                "UniversalForward", "ShadowCaster", "DepthOnly", "CustomShadow"),
+            LightModeCustomValues = FrozenSet.Create(
+                StringComparer.OrdinalIgnoreCase, "CustomShadow"),
+            HasScriptableRenderPipeline = true,
+            Provenance = ShaderTagSchemaProvenance.Mixed,
+            SourceFileCount = 1,
+            BuiltAt = DateTimeOffset.UnixEpoch,
+        };
+
+        var service = new IntelliSenseService(tagSchema: schema);
+
+        // ① 值字符串内、已输入前缀 "Uni"：必须给出 UniversalForward，且自定义 CustomShadow 被标注。
+        const string text = "Shader \"T\"\n{\n    SubShader\n    {\n        Tags { \"LightMode\" = \"Uni\" }\n    }\n}\n";
+        var (line, character) = Cursor(text, "\"Uni\"", 4); // 指向 Uni 的 i 之后
+        var json = Completion(service, text, line, character);
+        Check.NotNull(json, "标签值字符串内必须给候选（触发判定已为字符串开特例）");
+        var labels = All(json!, "label");
+        Check.Contains(labels, "UniversalForward", "LightMode 前缀 Uni 必须给出 UniversalForward");
+        Check.DoesNotContain(labels, "ShadowCaster", "ShadowCaster 不匹配 Uni 前缀，不应出现");
+
+        // ② 空前缀（刚敲完引号）：应给全量 LightMode 值。
+        const string empty = "Shader \"T\"\n{\n    SubShader\n    {\n        Tags { \"LightMode\" = \"\" }\n    }\n}\n";
+        var (l2, c2) = Cursor(empty, "\"\"", 1); // 指向两个引号之间
+        var json2 = Completion(service, empty, l2, c2);
+        Check.NotNull(json2, "空标签值也必须给候选");
+        var labels2 = All(json2!, "label");
+        Check.Contains(labels2, "CustomShadow", "空前缀必须含自定义值");
+        Check.Contains(labels2, "ShadowCaster", "空前缀必须含内置值");
+
+        // 自定义值标注：CustomShadow 的 detail 必须含「自定义」（用空前缀场景，它此时才出现）。
+        var pairs2 = Items(json2!);
+        var customFound = false;
+        var customDetail = "";
+        var builtinDetail = "";
+        foreach (var (lbl, det) in pairs2)
+        {
+            if (lbl == "CustomShadow") { customFound = true; customDetail = det; }
+            if (lbl == "ShadowCaster") { builtinDetail = det; }
+        }
+        Check.True(customFound, "空前缀场景必须含 CustomShadow");
+        Check.True(customDetail.Contains("自定义", StringComparison.Ordinal),
+            "自定义 LightMode 值必须标注「自定义 · 工程 C# ShaderTagId」，实际：" + customDetail);
+        Check.True(!builtinDetail.Contains("自定义", StringComparison.Ordinal),
+            "内置值不得标自定义：" + builtinDetail);
+
+        // ③ 封闭集合标签 RenderPipeline：走 ClosedSets。
+        const string rp = "Shader \"T\"\n{\n    SubShader\n    {\n        Tags { \"RenderPipeline\" = \"Uni\" }\n    }\n}\n";
+        var (l3, c3) = Cursor(rp, "\"Uni\"", 4);
+        var json3 = Completion(service, rp, l3, c3);
+        Check.NotNull(json3, "RenderPipeline 标签值必须给封闭集合候选");
+        Check.Contains(All(json3!, "label"), "UniversalPipeline", "RenderPipeline 必须给出 UniversalPipeline");
+
+        // ④ 自由文本标签 Queue：不猜，返回 null。
+        const string queue = "Shader \"T\"\n{\n    SubShader\n    {\n        Tags { \"Queue\" = \"Geo\" }\n    }\n}\n";
+        var (l4, c4) = Cursor(queue, "\"Geo\"", 4);
+        var json4 = Completion(service, queue, l4, c4);
+        Check.True(json4 is null, "Queue 是自由文本，不得给出候选（避免误导）");
+
+        // ⑤ 非标签字符串（#include 路径）：必须返回 null，不污染。
+        const string inc = "#include \"foo.hlsl\"\n";
+        var (l5, c5) = Cursor(inc, "\"foo.hlsl\"", 4);
+        var json5 = Completion(service, inc, l5, c5);
+        Check.True(json5 is null, "#include 路径字符串不是标签值，必须返回 null");
+
+        // ⑥ 未注入 schema：行为与注入前逐字节一致（标签值位置返回 false → null）。
+        var bare = new IntelliSenseService();
+        var json6 = Completion(bare, text, line, character);
+        Check.True(json6 is null, "未注入 schema 时标签值补全必须关闭（零回归）");
+    }
+
+    private const string Sample = """
+        Shader "T/IntelliSense"
+        {
+            SubShader
+            {
+                Pass
+                {
+                    HLSLPROGRAM
+                    #pragma vertex vert
+                    #pragma fragment frag
+
+                    struct Varyings
+                    {
+                        float2 uv;
+                        float3 positionWS;
+                        half4 color;
+                    };
+
+                    Varyings i;
+
+                    float4 frag(Varyings input) : SV_Target
+                    {
+                        float2 t = i.uv;
+                        float3 p = input.positionWS;
+                        return 0;
+                    }
+                    ENDHLSL
+                }
+            }
+        }
+        """;
+
+    // ── 1. 触发器 ────────────────────────────────────────────────────────────
+
+    private static void Trigger()
+    {
+        const string text = "a\nfloat2 t = i.uv;\n// comment i.\nstring s = \"i.\";\nfloat3 q = input.positionWS;\n";
+
+        var (l1, c1) = Cursor(text, "i.uv;", 2);
+        var member = TriggerContext.Detect(text, l1, c1);
+        Check.Equal(TriggerKind.MemberAccess, member.Kind, "~~i.~~ 应判为成员访问");
+        Check.Equal("i", member.MemberBase, "成员基名");
+        Check.Equal(string.Empty, member.Prefix, "无前缀");
+
+        var (l2, c2) = Cursor(text, "input.positionWS", 8);
+        var partial = TriggerContext.Detect(text, l2, c2);
+        Check.Equal(TriggerKind.MemberAccess, partial.Kind, "~~input.po~~ 应判为带前缀的成员访问");
+        Check.Equal("po", partial.Prefix, "成员前缀");
+        Check.Equal("input", partial.MemberBase, "成员基名（带前缀）");
+
+        var (l3, c3) = Cursor(text, "// comment i.", 12);
+        Check.Equal(TriggerKind.None, TriggerContext.Detect(text, l3, c3).Kind, "行注释内不得触发");
+
+        var (l4, c4) = Cursor(text, "\"i.\";", 3);
+        Check.Equal(TriggerKind.None, TriggerContext.Detect(text, l4, c4).Kind, "字符串内不得触发");
+
+        var (l5, c5) = Cursor(text, "float2 t", 6);
+        Check.Equal(TriggerKind.IdentifierPrefix, TriggerContext.Detect(text, l5, c5).Kind, "标识符前缀");
+        Check.Equal("float2", TriggerContext.Detect(text, l5, c5).Prefix, "前缀内容");
+
+        // 方括号属性标注：光标在 "[" 之后（可带前缀）；数组下标与数组声明不是属性标注。
+        const string attrText = "float4 f()\n{\n    [lo]\n    [unroll(4)] [br]\n    float a[4];\n    float2 t = a[ix];\n}\n";
+        var (la1, ca1) = Cursor(attrText, "[lo]", 1);
+        Check.Equal(TriggerKind.Attribute, TriggerContext.Detect(attrText, la1, ca1).Kind, "[ 后应判为属性标注");
+        Check.Equal(string.Empty, TriggerContext.Detect(attrText, la1, ca1).Prefix, "无前缀时属性前缀为空");
+
+        var (la2, ca2) = Cursor(attrText, "[lo]", 3);
+        Check.Equal(TriggerKind.Attribute, TriggerContext.Detect(attrText, la2, ca2).Kind, "[lo 应判为带前缀的属性标注");
+        Check.Equal("lo", TriggerContext.Detect(attrText, la2, ca2).Prefix, "属性前缀内容");
+
+        var (la3, ca3) = Cursor(attrText, "[br]", 3);
+        Check.Equal(TriggerKind.Attribute, TriggerContext.Detect(attrText, la3, ca3).Kind, "连续多个属性仍是属性标注");
+
+        var (la4, ca4) = Cursor(attrText, "a[ix]", 4);
+        Check.True(TriggerContext.Detect(attrText, la4, ca4).Kind != TriggerKind.Attribute, "数组下标不得判成属性标注");
+
+        var (la5, ca5) = Cursor(attrText, "a[4]", 2);
+        Check.True(TriggerContext.Detect(attrText, la5, ca5).Kind != TriggerKind.Attribute, "数组声明不得判成属性标注");
+    }
+
+    // ── 1.5 方括号属性标注补全 ─────────────────────────────────────────────
+    private static void AttributeComplete()
+    {
+        const string shader = """
+            Shader "T/Attr"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        []
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+
+        var service = new IntelliSenseService();
+        var (line, character) = Cursor(shader, "[]", 1);
+        var json = Completion(service, shader, line, character);
+        Check.NotNull(json, "HLSL 块里敲下 [ 必须给出属性候选");
+        var labels = All(json!, "label");
+        foreach (var expected in new[]
+        {
+            "branch", "flatten", "loop", "unroll", "unroll(n)", "fastopt", "allow_uav_condition",
+            "forcecase", "call", "numthreads(x, y, z)", "earlydepthstencil",
+        })
+        {
+            Check.Contains(labels, expected, "必须补出 " + expected);
+        }
+
+        Check.DoesNotContain(labels, "WaveSize(n)", "未启用 DXC 时不得给出 SM 6.6 专属属性");
+        Check.DoesNotContain(labels, "maxvertexcount(n)", "URP 不支持几何阶段，不得给出 maxvertexcount");
+        Check.True(json!.Contains("\"isIncomplete\":false", StringComparison.Ordinal), "候选集小，必须由客户端本地过滤");
+        Check.True(json!.Contains("\"insertTextFormat\":2", StringComparison.Ordinal), "带参数的属性要用片段插入");
+        Check.True(All(json!, "documentation").Count > 0, "每条候选都要带说明");
+
+        // 编辑器已自动配对出 [] 时，插入正文不能再补一个 ]。
+        Check.Contains(All(json!, "insertText"), "branch", "已存在右方括号时插入正文不带 ]");
+        Check.DoesNotContain(All(json!, "insertText"), "branch]", "不得重复补右方括号");
+
+        // 没有自动配对时，插入正文补上 ] 让标注闭合。
+        const string noClose = """
+            Shader "T/Attr"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        [
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+        var (l2, c2) = Cursor(noClose, "[", 1);
+        var json2 = Completion(service, noClose, l2, c2);
+        Check.NotNull(json2, "未闭合的 [ 也必须给出属性候选");
+        Check.Contains(All(json2!, "insertText"), "branch]", "没有右方括号时要补一个 ]");
+
+        // 带前缀：只留下匹配的候选。
+        const string prefixed = """
+            Shader "T/Attr"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        [lo]
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+        var (l3, c3) = Cursor(prefixed, "[lo]", 3);
+        var json3 = Completion(service, prefixed, l3, c3);
+        Check.NotNull(json3, "[lo 处必须给出候选");
+        Check.Contains(All(json3!, "label"), "loop", "前缀过滤后仍应含 loop");
+        Check.DoesNotContain(All(json3!, "label"), "branch", "前缀过滤后不应含 branch");
+
+        // 数组下标不是属性标注，保持原有前缀补全行为。
+        const string subscript = """
+            Shader "T/Attr"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        float a[4];
+                        float2 t = a[ix];
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+        var (l4, c4) = Cursor(subscript, "a[ix]", 4);
+        Check.True(TriggerContext.Detect(subscript, l4, c4).Kind != TriggerKind.Attribute,
+            "数组下标 a[ix 不得判成属性标注");
+
+        // ShaderLab 的 Properties 区段不是 HLSL 代码块，不弹 HLSL 属性候选。
+        const string properties = """
+            Shader "T/Attr"
+            {
+                Properties
+                {
+                    [Header(Test)]
+                }
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        []
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+        var (l5, c5) = Cursor(properties, "[Header(Test)]", 1);
+        Check.Equal(TriggerKind.Attribute, TriggerContext.Detect(properties, l5, c5).Kind,
+            "Properties 里的 [ 仍然会被判成属性标注，抑制必须发生在代码块判定这一步");
+        Check.True(!TryComplete(service, properties, l5, c5), "Properties 区段里不得弹 HLSL 属性候选");
+
+        // 连续写多个属性时，第二个 [ 之后也要给候选。
+        const string stacked = """
+            Shader "T/Attr"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        [unroll(4)] [lo]
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+        var (l9, c9) = Cursor(stacked, "[lo]", 3);
+        var json9 = Completion(service, stacked, l9, c9);
+        Check.NotNull(json9, "连续多个属性时，第二个 [ 之后也要给候选");
+        Check.Contains(All(json9!, "label"), "loop", "连续属性位置应补出 loop");
+
+        // 纯 HLSL 文件整篇都算代码块。
+        const string bare = """
+            float4 frag() : SV_Target
+            {
+                []
+                return 0;
+            }
+            """;
+        var (l6, c6) = Cursor(bare, "[]", 1);
+        Check.NotNull(Completion(service, bare, l6, c6), "纯 hlsl 文件里也要给出属性候选");
+
+        // DXC 专属属性：只在文档显式启用 DXC 时给。
+        const string dxc = """
+            Shader "T/Attr"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        #pragma use_dxc
+                        []
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+        var (l7, c7) = Cursor(dxc, "[]", 1);
+        var json7 = Completion(service, dxc, l7, c7);
+        Check.NotNull(json7, "启用 DXC 的文档也要给出属性候选");
+        Check.Contains(All(json7!, "label"), "WaveSize(n)", "启用 DXC 时要补出 SM 6.6 的 WaveSize");
+
+        var neverDxc = dxc.Replace("#pragma use_dxc", "#pragma never_use_dxc", StringComparison.Ordinal);
+        var (l8, c8) = Cursor(neverDxc, "[]", 1);
+        var json8 = Completion(service, neverDxc, l8, c8);
+        Check.NotNull(json8, "显式禁用 DXC 的文档也要给出通用属性候选");
+        Check.DoesNotContain(All(json8!, "label"), "WaveSize(n)", "never_use_dxc 不得被当成 use_dxc");
+    }
+
+    // ── 1.6 属性标注的真实 LSP 回环 ────────────────────────────────────────
+    private static void AttributeLspRoundTrip()
+    {
+        const string text = """
+            Shader "T/Attr"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        []
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+
+        const string uri = "file:///attr-lsp.shader";
+        var (line, character) = Cursor(text, "[]", 1);
+        var service = new IntelliSenseService();
+        var session = new LspServerSession(
+            new FakeAnalyzer().AnalyzeAsync,
+            intelliSense: new IntelliSenseProvider
+            {
+                Completion = service.ProvideCompletions,
+                Hover = service.ProvideHover,
+            });
+        using var client = new LspTestClient(session);
+
+        client.SendAtomicAsync(LspCorpus.Initialize(1)).AsTask().GetAwaiter().GetResult();
+        client.SendAtomicAsync(LspCorpus.Initialized()).AsTask().GetAwaiter().GetResult();
+
+        var didOpen = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{"
+            + "\"uri\":" + QuoteJson(uri)
+            + ",\"languageId\":\"shaderlab\",\"version\":1,\"text\":" + QuoteJson(text) + "}}}";
+        client.SendAtomicAsync(didOpen).AsTask().GetAwaiter().GetResult();
+
+        var request = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{"
+            + "\"textDocument\":{\"uri\":" + QuoteJson(uri)
+            + "},\"position\":{\"line\":" + line + ",\"character\":" + character + "}}}";
+        client.SendAtomicAsync(request).AsTask().GetAwaiter().GetResult();
+
+        // 会话可能先推诊断帧，按 id 收帧而不是假设「下一帧就是答案」。
+        string? init = null;
+        string? response = null;
+        for (var i = 0; i < 20 && response is null; i++)
+        {
+            var frame = client.ReceiveAsync().AsTask().GetAwaiter().GetResult();
+            if (frame.Contains("\"id\":1", StringComparison.Ordinal))
+            {
+                init = frame;
+            }
+
+            if (frame.Contains("\"id\":2", StringComparison.Ordinal))
+            {
+                response = frame;
+            }
+        }
+
+        Check.NotNull(init, "initialize 必须有应答");
+        Check.True(init!.Contains("\"triggerCharacters\":[\".\",\"[\"]", StringComparison.Ordinal),
+            "能力宣告必须包含 '['：" + init);
+        Check.NotNull(response, "completion 必须有应答");
+
+        using var document = JsonDocument.Parse(response!);
+        var result = document.RootElement.GetProperty("result");
+        var labels = new List<string>();
+        if (result.ValueKind == JsonValueKind.Object && result.TryGetProperty("items", out var items))
+        {
+            foreach (var item in items.EnumerateArray())
+            {
+                if (item.TryGetProperty("label", out var label) && label.ValueKind == JsonValueKind.String)
+                {
+                    labels.Add(label.GetString()!);
+                }
+            }
+        }
+
+        Check.Contains(labels, "branch", "真实 LSP 请求必须补出 branch，实际：" + string.Join(",", labels));
+        Check.Contains(labels, "loop", "真实 LSP 请求必须补出 loop");
+        Check.DoesNotContain(labels, "WaveSize(n)", "未启用 DXC 时真实 LSP 请求也不得给 SM 6.6 专属属性");
+    }
+
+    /// 把任意文本写成 JSON 字符串字面量（含引号），走手写写入器，避免反射式序列化。
+    private static string QuoteJson(string value)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStringValue(value);
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    // ── 2. 成员补全 ──────────────────────────────────────────────────────────
+
+    private static void MemberComplete()
+    {
+        var service = new IntelliSenseService();
+        var (line, character) = Cursor(Sample, "i.uv;", 2);
+
+        var json = Completion(service, Sample, line, character);
+        Check.NotNull(json, "~~i.~~ 处必须给出补全");
+        Check.Contains(All(json!, "label"), "uv", "必须补出 uv");
+        Check.Contains(All(json!, "label"), "positionWS", "必须补出 positionWS");
+        Check.Contains(All(json!, "label"), "color", "必须补出 color");
+        Check.True(json!.Contains("\"isIncomplete\":false", StringComparison.Ordinal),
+            "候选集小，必须回 isIncomplete:false 由客户端本地过滤（详设 v2.0 第 2 条）");
+
+        // 带前缀：input.po → 只剩 positionWS（偏移 8 = "input.po" 之后）
+        var (l2, c2) = Cursor(Sample, "input.positionWS", 8);
+        var filtered = Completion(service, Sample, l2, c2);
+        Check.NotNull(filtered, "~~input.pos~~ 处必须给出补全");
+        var labels = All(filtered!, "label");
+        Check.Contains(labels, "positionWS", "前缀过滤后仍应含 positionWS");
+        Check.DoesNotContain(labels, "uv", "前缀过滤后不应含 uv");
+    }
+
+    // ── 3. 内建补全 ──────────────────────────────────────────────────────────
+
+    private static void BuiltinComplete()
+    {
+        var service = new IntelliSenseService();
+        const string text = "Shader \"T\"\n{\n    SubShader\n    {\n        Pass\n        {\n            HLSLPROGRAM\n            Trans\n            ENDHLSL\n        }\n    }\n}\n";
+        var (line, character) = Cursor(text, "Trans", 5);
+
+        var json = Completion(service, text, line, character);
+        Check.NotNull(json, "~~Trans~~ 前缀必须给出内建候选");
+        Check.Contains(All(json!, "label"), "TRANSFORM_TEX", "必须含 TRANSFORM_TEX");
+        Check.Contains(All(json!, "label"), "transpose", "大小写不敏感，应含 transpose");
+
+        // 法律边界：内置表不得含 URP 源码符号（只允许语言层 + ShaderLab 关键字）
+        var labels2 = All(json!, "label");
+        Check.DoesNotContain(labels2, "TransformObjectToHClip", "URP 函数禁止内置（Unity Companion License）");
+        Check.DoesNotContain(labels2, "GetVertexPositionInputs", "URP 函数禁止内置");
+    }
+
+    // ── 3b. 内建类型（float4 / half2 / sampler2D …）────────────────────────
+
+    private static void BuiltinTypes()
+    {
+        var service = new IntelliSenseService();
+
+        // 输入 "float"：应给出 float / float2 / float3 / float4 / float4x4 这类类型。
+        const string text = "Shader \"T\"\n{\n    SubShader\n    {\n        Pass\n        {\n            HLSLPROGRAM\n            float\n            ENDHLSL\n        }\n    }\n}\n";
+        var (line, character) = Cursor(text, "float", 5);
+        var json = Completion(service, text, line, character);
+        Check.NotNull(json, "~~float~~ 前缀必须给出候选");
+
+        var labels = All(json!, "label");
+        Check.Contains(labels, "float", "应含 float 自身");
+        Check.Contains(labels, "float2", "应含 float2");
+        Check.Contains(labels, "float4", "应含 float4");
+        Check.Contains(labels, "float4x4", "应含 float4x4");
+
+        // 排序：类型必须排在 0_ 档（工程环境符号档），否则输入 float 时列表头部会全是
+        // 同前缀的 URP 宏（如 FRAMEBUFFER_INPUT_FLOAT），类型被压到后面。
+        Check.Contains(All(json!, "sortText"), "0_float4", "float4 必须排在 0_ 档");
+        Check.DoesNotContain(All(json!, "sortText"), "1_float4", "float4 不得留在内建函数档");
+
+        // 其他常见前缀。
+        const string halfText = "Shader \"T\"\n{\n    SubShader\n    {\n        Pass\n        {\n            HLSLPROGRAM\n            half\n            ENDHLSL\n        }\n    }\n}\n";
+        var (l2, c2) = Cursor(halfText, "half", 4);
+        var json2 = Completion(service, halfText, l2, c2);
+        Check.NotNull(json2, "~~half~~ 前缀必须给出候选");
+        Check.Contains(All(json2!, "label"), "half4", "应含 half4");
+
+        const string samText = "Shader \"T\"\n{\n    SubShader\n    {\n        Pass\n        {\n            HLSLPROGRAM\n            sam\n            ENDHLSL\n        }\n    }\n}\n";
+        var (l3, c3) = Cursor(samText, "sam", 3);
+        var json3 = Completion(service, samText, l3, c3);
+        Check.NotNull(json3, "~~sam~~ 前缀必须给出候选");
+        var labels3 = All(json3!, "label");
+        Check.Contains(labels3, "sampler2D", "应含 sampler2D");
+        Check.Contains(labels3, "SamplerState", "应含 SamplerState（大小写不敏感）");
+    }
+
+    // ── 4. 悬停 ──────────────────────────────────────────────────────────────
+
+    private static void Hover()
+    {
+        var service = new IntelliSenseService();
+        var (line, character) = Cursor(Sample, "Varyings input", 3);
+
+        var json = Hover(service, Sample, line, character);
+        Check.NotNull(json, "结构体名上必须有悬停内容");
+        Check.True(json!.Contains("positionWS", StringComparison.Ordinal), "悬停应列出结构体字段：" + json);
+
+        const string withCall = "Shader \"T\"\n{\n    SubShader\n    {\n        Pass\n        {\n            HLSLPROGRAM\n            float x = saturate(1.0);\n            ENDHLSL\n        }\n    }\n}\n";
+        var (l3, c3) = Cursor(withCall, "saturate", 3);
+        var hoverBuiltin = Hover(service, withCall, l3, c3);
+        Check.NotNull(hoverBuiltin, "内建函数上必须有悬停内容");
+        Check.True(hoverBuiltin!.Contains("saturate", StringComparison.Ordinal), "悬停应含签名：" + hoverBuiltin);
+    }
+
+    // ── 5. 降级路径 ──────────────────────────────────────────────────────────
+
+    private static void Degrade()
+    {
+        var service = new IntelliSenseService();
+
+        // ① 注释内的请求 → 无结果
+        const string commented = "Shader \"T\"\n{\n    SubShader\n    {\n        Pass\n        {\n            HLSLPROGRAM\n            // 这里写 i. 也不该弹补全\n            ENDHLSL\n        }\n    }\n}\n";
+        var (l1, c1) = Cursor(commented, "i. 也不该", 2);
+        Check.True(!TryComplete(service, commented, l1, c1), "注释内不得产生补全");
+
+        // ② 变量声明不在本文件（模拟定义在 include 里）→ 空结果而非猜测
+        const string unknown = "Shader \"T\"\n{\n    SubShader\n    {\n        Pass\n        {\n            HLSLPROGRAM\n            float2 t = external.x;\n            ENDHLSL\n        }\n    }\n}\n";
+        var (l2, c2) = Cursor(unknown, "external.x", 9);
+        Check.True(!TryComplete(service, unknown, l2, c2), "未声明的基名必须返回空结果（不猜）");
+
+        // ③ 变量在但结构体定义不在 → 空结果（Varyings 定义在 include 里是真实高频场景）
+        const string structMissing = "Shader \"T\"\n{\n    SubShader\n    {\n        Pass\n        {\n            HLSLPROGRAM\n            Varyings input;\n            float2 t = input.uv;\n            ENDHLSL\n        }\n    }\n}\n";
+        var (l3, c3) = Cursor(structMissing, "input.uv", 6);
+        Check.True(!TryComplete(service, structMissing, l3, c3), "结构体定义不在本文件时必须降级为空");
+    }
+
+    // ── 6. 能力成套声明（会话级）──────────────────────────────────────────────
+
+    private static void Capabilities()
+    {
+        var service = new IntelliSenseService();
+
+        // 注入 provider → 必须成套宣告
+        var withProvider = new LspServerSession(
+            new FakeAnalyzer().AnalyzeAsync,
+            null,
+            new IntelliSenseProvider
+            {
+                Completion = service.ProvideCompletions,
+                Hover = service.ProvideHover,
+            });
+
+        using (var client = new LspTestClient(withProvider))
+        {
+            client.SendAtomicAsync("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":1,\"rootUri\":null,\"capabilities\":{}}}")
+                .AsTask().GetAwaiter().GetResult();
+
+            var init = client.ReceiveAsync().AsTask().GetAwaiter().GetResult();
+            Check.True(init.Contains("\"completionProvider\"", StringComparison.Ordinal), "必须宣告 completionProvider：" + init);
+            Check.True(init.Contains("\"hoverProvider\":true", StringComparison.Ordinal), "必须宣告 hoverProvider：" + init);
+            Check.True(init.Contains("\"triggerCharacters\":[\".\",\"[\"]", StringComparison.Ordinal),
+                "triggerCharacters 必须是 '.' 与 '['（详设 v2.0 第 4 条）：" + init);
+            Check.True(init.Contains("\"resolveProvider\":false", StringComparison.Ordinal), "本服务不做 resolve");
+        }
+
+        // 不注入 → 必须一个都不宣告（避免"宣告了却不会响应"）
+        var without = new LspServerSession(new FakeAnalyzer().AnalyzeAsync);
+        using (var client = new LspTestClient(without))
+        {
+            client.SendAtomicAsync("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":1,\"rootUri\":null,\"capabilities\":{}}}")
+                .AsTask().GetAwaiter().GetResult();
+
+            var init = client.ReceiveAsync().AsTask().GetAwaiter().GetResult();
+            Check.True(!init.Contains("completionProvider", StringComparison.Ordinal), "未注入时不得宣告 completionProvider：" + init);
+            Check.True(!init.Contains("hoverProvider", StringComparison.Ordinal), "未注入时不得宣告 hoverProvider：" + init);
+        }
+    }
+
+    // ── 7. 未启用能力必须回 MethodNotFound ──────────────────────────────────
+
+    private static void MethodNotFound()
+    {
+        var session = new LspServerSession(new FakeAnalyzer().AnalyzeAsync);
+        using var client = new LspTestClient(session);
+
+        client.SendAtomicAsync("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":1,\"rootUri\":null,\"capabilities\":{}}}")
+            .AsTask().GetAwaiter().GetResult();
+        _ = client.ReceiveAsync().AsTask().GetAwaiter().GetResult();
+
+        client.SendAtomicAsync("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///x.shader\"},\"position\":{\"line\":0,\"character\":0}}}")
+            .AsTask().GetAwaiter().GetResult();
+
+        var response = client.ReceiveAsync().AsTask().GetAwaiter().GetResult();
+        Check.True(response.Contains("\"error\"", StringComparison.Ordinal), "未启用能力必须回错误而不是静默丢弃：" + response);
+        Check.True(response.Contains("-32601", StringComparison.Ordinal), "错误码必须是 MethodNotFound(-32601)：" + response);
+    }
+
+    // ── 工具 ────────────────────────────────────────────────────────────────
+
+// ── 8. 真实语料回归（R1~R6，2026-09-26 加入）──────────────────────────────
+
+    /// <summary>
+    /// 用户真实手写 shader 上实测到的六类缺陷的回归用例。
+    /// </summary>
+    /// <remarks>
+    /// 每一条都对应一个"实测过的错误行为"（详见收尾指南 §27/§28）：
+    /// R1 调用实参被登记成变量、R2 合并顺序与文本顺序相反、R3 语义标注污染字段解析、
+    /// R4 前缀补全不查文档内符号、R5 real* 与模板尖括号、R6 索引缓存不得改变结果。
+    /// </remarks>
+    private static void RegressionRules()
+    {
+        var service = new IntelliSenseService();
+
+        // R1：声明之后才出现的同名调用，不得覆盖声明
+        const string r1 = """
+            Shader "T/R1"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        struct Varyings { float3 positionWS; half4 color; };
+
+                        Varyings vert(Varyings input)
+                        {
+                            return input;
+                        }
+
+                        float4 frag(Varyings i) : SV_Target
+                        {
+                            GetAdditionalLight(i, 0);
+                            return i.color;
+                        }
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+
+        var (l1, c1) = Cursor(r1, "return i.color;", 9);
+        var json1 = Completion(service, r1, l1, c1);
+        Check.True(json1 is not null, "R1：调用实参不得覆盖形参绑定（i.color 处应有候选）\n" + json1);
+        Check.True(All(json1!, "label").Contains("color"), "R1：应补出 Varyings.color");
+
+        // R2：HLSLINCLUDE 写在前面，其声明必须被后面的 Pass 内声明覆盖
+        const string r2 = """
+            Shader "T/R2"
+            {
+                SubShader
+                {
+                    HLSLINCLUDE
+                    static float4 gSprite;
+                    void Touch(float4 gSprite) { }
+                    ENDHLSL
+
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        struct Varyings { float3 positionWS; half4 color; };
+                        Varyings gSprite;
+                        float4 frag() : SV_Target { return gSprite.color; }
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+
+        var (l2, c2) = Cursor(r2, "return gSprite.color;", 15);
+        var json2 = Completion(service, r2, l2, c2);
+        Check.True(json2 is not null, "R2：合并顺序必须按文本顺序（后出现的 Pass 内声明应胜出）\n" + json2);
+        Check.True(All(json2!, "label").Contains("positionWS"), "R2：应补出 Varyings.positionWS");
+
+        // R3：结构体字段里的语义标注不得吃掉后面的字段
+        const string r3 = """
+            Shader "T/R3"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        struct V
+                        {
+                            float4 positionCS : SV_POSITION;
+                            half3 normalWS : TEXCOORD0;
+                            float2 uv : TEXCOORD1;
+                        };
+                        float4 frag(V i) : SV_Target { return i.uv.x; }
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+
+        var (l3, c3) = Cursor(r3, "return i.uv.x;", 9);
+        var json3 = Completion(service, r3, l3, c3);
+        Check.True(json3 is not null, "R3：带语义标注的结构体必须补出字段\n" + json3);
+        var labels3 = All(json3!, "label");
+        Check.True(labels3.Contains("positionCS") && labels3.Contains("normalWS") && labels3.Contains("uv"),
+            "R3：三个字段都要在，实际 " + string.Join(",", labels3));
+
+        // R4：前缀补全必须包含本文件符号（含声明式宏登记进来的纹理/sampler 名）
+        const string r4 = """
+            Shader "T/R4"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        CBUFFER_START(UnityPerMaterial)
+                            float _GrassWidth;
+                            float _GrassHeight;
+                        CBUFFER_END
+                        TEXTURE2D(_GrassColorRT);
+                        SAMPLER(sampler_GrassColorRT);
+                        float4 frag() : SV_Target { _GrassWidth; return 0; }
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+
+        var (l4b, c4b) = Cursor(r4, "_GrassWidth; return 0;", 5);   // 光标停在 _Gras 之后
+        var json4b = Completion(service, r4, l4b, c4b);
+        Check.True(json4b is not null, "R4：本文件符号应参与前缀补全");
+        var labels4 = All(json4b!, "label");
+        Check.True(labels4.Contains("_GrassWidth") && labels4.Contains("_GrassHeight"),
+            "R4：应补出 _Grass* 变量，实际 " + string.Join(",", labels4));
+        Check.True(labels4.Contains("_GrassColorRT"),
+            "R4/R5：TEXTURE2D(_X) 这类声明式宏应把 _X 登记进来，实际 " + string.Join(",", labels4));
+
+        // R5：real* 是类型；模板尖括号内的类型名不得被登记成变量
+        const string r5 = """
+            Shader "T/R5"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        struct Varyings { float3 positionWS; };
+                        static real4 gTmp;
+                        StructuredBuffer<Varyings> gBuf;
+                        float4 frag() : SV_Target { return gTmp; }
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+
+        var (l5, c5) = Cursor(r5, "return gTmp;", 8);
+        var json5 = Completion(service, r5, l5, c5);
+        Check.True(json5 is not null, "R5：real4 声明的变量必须被登记");
+        var labels5 = All(json5!, "label");
+        Check.True(labels5.Contains("gTmp"), "R5：应补出 gTmp，实际 " + string.Join(",", labels5));
+        Check.True(labels5.Contains("gBuf"), "R5：StructuredBuffer 变量本身应被登记");
+        Check.True(!labels5.Contains("Varyings"), "R5：模板实参里的类型名不得被登记成变量");
+
+        // R7：内建向量的分量补全 + 矩阵 _mRC
+        const string r7 = """
+            Shader "T/R7"
+            {
+                SubShader
+                {
+                    Pass
+                    {
+                        HLSLPROGRAM
+                        float4 gColor;
+                        half3 gNormal;
+                        real4x4 gMatrix;
+
+                        float4 frag() : SV_Target
+                        {
+                            float2 t = gColor.rg;
+                            half3 n = gNormal.xyz;
+                            float g00 = gMatrix._m00;
+                            return gColor;
+                        }
+                        ENDHLSL
+                    }
+                }
+            }
+            """;
+
+        var (l7, c7) = Cursor(r7, "float2 t = gColor.rg;", 18);
+        var json7 = Completion(service, r7, l7, c7);
+        Check.True(json7 is not null, "R7：float4 的成员补全必须给出分量候选\n" + json7);
+        var labels7 = All(json7!, "label");
+        Check.Contains(labels7, "rgba", "R7：float4 应含 rgba");
+        Check.Contains(labels7, "xz", "R7：float4 应含 xz");
+        Check.Contains(labels7, "w", "R7：float4 应含单分量 w");
+
+        var (l7b, c7b) = Cursor(r7, "half3 n = gNormal.xyz;", 18);
+        var json7b = Completion(service, r7, l7b, c7b);
+        Check.True(json7b is not null, "R7：half3 的成员补全必须给出分量候选");
+        var labels7b = All(json7b!, "label");
+        Check.Contains(labels7b, "rgb", "R7：half3 应含 rgb");
+        Check.DoesNotContain(labels7b, "w", "R7：half3 不该给 w");
+
+        var (l7c, c7c) = Cursor(r7, "float g00 = gMatrix._m00;", 20);
+        var json7c = Completion(service, r7, l7c, c7c);
+        Check.True(json7c is not null, "R7：矩阵的成员补全必须给出 _mRC");
+        var labels7c = All(json7c!, "label");
+        Check.Contains(labels7c, "_m00", "R7：矩阵应含 _m00");
+        Check.Contains(labels7c, "_m33", "R7：real4x4 应含 _m33");
+        Check.DoesNotContain(labels7c, "x", "R7：矩阵不该给 swizzle");
+
+        // R6：缓存命中不得改变结果（同文本重复请求结果一致）
+        var (l6, c6) = Cursor(r3, "return i.uv.x;", 9);
+        var first = Completion(service, r3, l6, c6);
+        var second = Completion(service, r3, l6, c6);
+        Check.Equal(first, second, "R6：索引缓存命中后结果必须逐字节一致");
+
+        TestCaseHelpers.Report("R1~R7 回归：" + labels3.Count + " 个语义标注字段 / "
+            + labels4.Count + " 个文档内符号 / " + labels5.Count + " 个 R5 符号 / "
+            + labels7.Count + " 个 float4 分量 / " + labels7c.Count + " 个矩阵分量");
+    }
+
+// ── 9. 文档生命周期回调契约（预热链路的入口）────────────────────────────
+
+    /// <summary>
+    /// 断言会话在 didOpen / didSave / didClose 时按契约触发对应回调。
+    /// </summary>
+    /// <remarks>
+    /// 这三条回调是 include 链符号预热（与失效）的唯一入口，属于跨模块契约：
+    /// 会话侧改了时序、或宿主侧漏接，都会让预热静默失效 —— 而静默失效的表现只是
+    /// 「少给候选」，不会报错，所以必须有断言钉住。
+    /// </remarks>
+    private static void LifecycleCallbacks()
+    {
+        // 语料刻意不含引号，便于直接拼进 JSON 字面量
+        const string shader = "Shader TestShader { SubShader { Pass { HLSLPROGRAM float4 frag() : SV_Target { return 0; } ENDHLSL } } }";
+
+        string? openedUri = null;
+        string? openedText = null;
+        string? savedUri = null;
+        string? savedText = null;
+        string? closedUri = null;
+
+        var service = new IntelliSenseService();
+        var provider = new IntelliSenseProvider
+        {
+            Completion = service.ProvideCompletions,
+            Hover = service.ProvideHover,
+            DocumentOpened = (uri, text) => { openedUri = uri; openedText = text; },
+            DocumentSaved = (uri, text) => { savedUri = uri; savedText = text; },
+            DocumentClosed = uri => closedUri = uri,
+        };
+
+        var session = new LspServerSession(new FakeAnalyzer().AnalyzeAsync, null, provider);
+        using var client = new LspTestClient(session);
+
+        client.SendAtomicAsync("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":1,\"rootUri\":null,\"capabilities\":{}}}")
+            .AsTask().GetAwaiter().GetResult();
+
+        client.SendAtomicAsync("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.shader\",\"languageId\":\"shaderlab\",\"version\":1,\"text\":\"" + shader + "\"}}}")
+            .AsTask().GetAwaiter().GetResult();
+
+        // 等 didOpen 真正被处理完（也顺带保证后续 didSave 一定在 didOpen 之后）
+        Check.True(WaitFor(() => openedUri is not null), "didOpen 必须触发 DocumentOpened");
+        Check.Equal("file:///t.shader", openedUri, "DocumentOpened 的 uri");
+        Check.Equal(shader, openedText, "DocumentOpened 的 text");
+
+        client.SendAtomicAsync("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.shader\"}}}")
+            .AsTask().GetAwaiter().GetResult();
+
+        Check.True(WaitFor(() => savedUri is not null), "didSave 必须触发 DocumentSaved（增量预热的入口）");
+        Check.Equal("file:///t.shader", savedUri, "DocumentSaved 的 uri");
+        Check.Equal(shader, savedText, "DocumentSaved 的 text 应取阴影文档全文");
+
+        client.SendAtomicAsync("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.shader\"}}}")
+            .AsTask().GetAwaiter().GetResult();
+
+        Check.True(WaitFor(() => closedUri is not null), "didClose 必须触发 DocumentClosed");
+        Check.Equal("file:///t.shader", closedUri, "DocumentClosed 的 uri");
+
+        TestCaseHelpers.Report("生命周期回调：opened / saved / closed 均已按契约触发");
+    }
+
+    /// <summary>轮询等待条件成立（通知没有响应帧，无法用读帧同步）。</summary>
+    private static bool WaitFor(Func<bool> condition)
+    {
+        var deadline = Environment.TickCount64 + 5000;
+        while (Environment.TickCount64 < deadline)
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            Thread.Sleep(10);
+        }
+
+        return condition();
+    }
+
+    private static bool TryComplete(IntelliSenseService service, string text, int line, int character)
+    {
+        var writer = new ArrayBufferWriter<byte>();
+        using var json = new Utf8JsonWriter(writer);
+        return service.ProvideCompletions(new PositionRequest("file:///t.shader", text, line, character), json);
+    }
+
+    private static string? Completion(IntelliSenseService service, string text, int line, int character)
+    {
+        var writer = new ArrayBufferWriter<byte>();
+        using (var json = new Utf8JsonWriter(writer))
+        {
+            if (!service.ProvideCompletions(new PositionRequest("file:///t.shader", text, line, character), json))
+            {
+                return null;
+            }
+        }
+
+        return Encoding.UTF8.GetString(writer.WrittenSpan);
+    }
+
+    private static string? Hover(IntelliSenseService service, string text, int line, int character)
+    {
+        var writer = new ArrayBufferWriter<byte>();
+        using (var json = new Utf8JsonWriter(writer))
+        {
+            if (!service.ProvideHover(new PositionRequest("file:///t.shader", text, line, character), json))
+            {
+                return null;
+            }
+        }
+
+        return Encoding.UTF8.GetString(writer.WrittenSpan);
+    }
+
+    /// <summary>从补全结果 JSON 里抽出所有给定字段的取值（测试用，允许分配）。</summary>
+    private static List<string> All(string json, string property)
+    {
+        var found = new List<string>();
+        using var document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty("items", out var items))
+        {
+            return found;
+        }
+
+        foreach (var item in items.EnumerateArray())
+        {
+            if (item.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String)
+            {
+                found.Add(value.GetString()!);
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>解析补全 JSON 成 (label,detail) 对，便于逐项核对标注。</summary>
+    private static List<(string Label, string Detail)> Items(string json)
+    {
+        var found = new List<(string, string)>();
+        using var document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty("items", out var items))
+        {
+            return found;
+        }
+
+        foreach (var item in items.EnumerateArray())
+        {
+            var label = item.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString()! : "";
+            var detail = item.TryGetProperty("detail", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString()! : "";
+            found.Add((label, detail));
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// 把「marker 第 nth 次出现处 + offset 个字符」换算成 LSP 的 0-based (line, character)。
+    /// </summary>
+    /// <remarks>
+    /// 同名标记（如 "input."）在一份语料里出现多次时，用 nth 指定是哪一处 ——
+    /// 跨 Pass 同名形参的用例必须能分别定位到每个 Pass 里的那一处。
+    /// </remarks>
+    private static (int Line, int Character) Cursor(string text, string marker, int offset, int nth = 0)
+    {
+        var index = -1;
+        for (var k = 0; k <= nth; k++)
+        {
+            index = text.IndexOf(marker, index + 1, StringComparison.Ordinal);
+            Check.True(index >= 0, "测试语料缺少第 " + nth + " 个标记：" + marker);
+        }
+
+        var absolute = index + offset;
+
+        var line = 0;
+        var lineStart = 0;
+        for (var i = 0; i < absolute; i++)
+        {
+            if (text[i] == '\n')
+            {
+                line++;
+                lineStart = i + 1;
+            }
+        }
+
+        return (line, absolute - lineStart);
+    }
+}
