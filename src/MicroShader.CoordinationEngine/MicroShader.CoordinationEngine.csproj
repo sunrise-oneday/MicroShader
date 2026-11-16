@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MicroShader.CoordinationEngine</RootNamespace>
+    <AssemblyName>MicroShader.CoordinationEngine</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MicroShader.Domain\MicroShader.Domain.csproj" />
+    <ProjectReference Include="..\MicroShader.ObservabilityEngine\MicroShader.ObservabilityEngine.csproj" />
+    <!--
+      格式化引擎（模块 14）。FormatEngine 是零引用的叶子，本工程引用它是为了
+      FormatContracts 里的 BraceStyle / FormatOptions 两个类型 —— 契约与实现同处把关。
+    -->
+    <ProjectReference Include="..\MicroShader.FormatEngine\MicroShader.FormatEngine.csproj" />
+  </ItemGroup>
+
+</Project>
