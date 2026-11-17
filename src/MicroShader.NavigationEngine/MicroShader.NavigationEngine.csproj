@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MicroShader.NavigationEngine</RootNamespace>
+    <AssemblyName>MicroShader.NavigationEngine</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MicroShader.Domain\MicroShader.Domain.csproj" />
+    <ProjectReference Include="..\MicroShader.ShaderLab\MicroShader.ShaderLab.csproj" />
+    <ProjectReference Include="..\MicroShader.IntelliSenseEngine\MicroShader.IntelliSenseEngine.csproj" />
+    <ProjectReference Include="..\MicroShader.ObservabilityEngine\MicroShader.ObservabilityEngine.csproj" />
+  </ItemGroup>
+
+</Project>

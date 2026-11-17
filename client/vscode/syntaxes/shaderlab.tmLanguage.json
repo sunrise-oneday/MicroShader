@@ -1,0 +1,125 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Unity ShaderLab",
+  "scopeName": "source.shaderlab",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#program-blocks"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#preprocessor"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#property-names"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.shaderlab",
+          "begin": "/\\*",
+          "end": "\\*/"
+        },
+        {
+          "name": "comment.line.double-slash.shaderlab",
+          "begin": "//",
+          "end": "$"
+        }
+      ]
+    },
+    "program-blocks": {
+      "patterns": [
+        {
+          "comment": "HLSL / CG 程序块整体包一层，块内仍走通用规则",
+          "name": "meta.embedded.block.hlsl.shaderlab",
+          "begin": "(?i)^\\s*(HLSLPROGRAM|CGPROGRAM)\\b",
+          "end": "(?i)^\\s*(ENDHLSL|ENDCG)\\b",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.directive.program.begin.shaderlab"
+            }
+          },
+          "endCaptures": {
+            "1": {
+              "name": "keyword.control.directive.program.end.shaderlab"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#preprocessor"
+            },
+            {
+              "include": "#numbers"
+            }
+          ]
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.shaderlab",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.shaderlab",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "preprocessor": {
+      "patterns": [
+        {
+          "name": "keyword.control.directive.include.shaderlab",
+          "match": "(?i)^\\s*#\\s*(include|include_with_pragmas|pragma\\s+(kernel|vertex|fragment|target|require|multi_compile|shader_feature|only_renderers|exclude_renderers)|define|undef|if|ifdef|ifndef|else|elif|endif)\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.shaderlab",
+          "match": "(?i)\\b(Shader|SubShader|Pass|Properties|Tags|Fallback|CustomEditor|Dependency|Name|LOD|Blend|ZWrite|ZTest|Cull|Offset|ColorMask|Stencil|GrabPass|UsePass|Legacy)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.shaderlab",
+          "match": "\\b\\d+(\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "property-names": {
+      "patterns": [
+        {
+          "name": "variable.other.property.shaderlab",
+          "match": "(?<=[)\\s*_?[A-Za-z]\\w*(?=\\s*\\()"
+        }
+      ]
+    }
+  }
+}
