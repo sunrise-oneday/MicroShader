@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>MicroShader.FormatEngine</RootNamespace>
+    <AssemblyName>MicroShader.FormatEngine</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    模块 14：格式化引擎。
+    刻意零 ProjectReference：格式化只吃文本、只吐文本，不读盘、不碰 VFS、不认识 DXC，
+    因此它是全系统的叶子依赖（与 ObservabilityEngine 同级）。
+    LSP 侧的契约类型（FormatProvider / FormatDocumentWriter）定义在 CoordinationEngine，
+    由 CoordinationEngine 引用本工程 —— 契约需要 BraceStyle/FormatOptions 这两个本模块的类型。
+  -->
+
+</Project>
